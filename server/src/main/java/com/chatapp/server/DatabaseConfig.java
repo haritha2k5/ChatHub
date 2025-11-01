@@ -29,13 +29,30 @@ public class DatabaseConfig {
         Connection conn = null;
         try {
             conn = getConnection();
+            
+            var clearStmt = conn.createStatement();
+            clearStmt.execute("DELETE FROM users");
+            System.out.println("Old users cleared!");
+            
             var stmt = conn.prepareStatement("INSERT INTO users (username, password) VALUES (?, ?)");
-            stmt.setString(1, "testuser");
-            stmt.setString(2, "testpass");
-            stmt.executeUpdate();
-            System.out.println("Test user 'testuser' inserted!");
+            
+            String[][] users = {
+                {"haritha", "pass"},
+                {"aakash", "pass"},
+                {"kaniska", "pass"},
+                {"kabilan", "pass"},
+                {"srivinay", "pass"}
+            };
+            
+            for (String[] user : users) {
+                stmt.setString(1, user[0]);
+                stmt.setString(2, user[1]);
+                stmt.executeUpdate();
+                System.out.println(user[0] + " inserted!");
+            }
+            
         } catch (SQLException e) {
-            System.out.println("Test user already exists or error occurred: " + e.getMessage());
+            System.out.println("Error: " + e.getMessage());
         } finally {
             if (conn != null) {
                 try {
