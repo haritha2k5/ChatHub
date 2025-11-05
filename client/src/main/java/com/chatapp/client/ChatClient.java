@@ -34,9 +34,12 @@ public class ChatClient extends Application {
     private Stage primaryStage;
     private ListView<ChatPreview> chatListView;
     private ListView<MessageItem> messagesListView;
-    private Label typingLabel; // Typing indicator label
-    private Map<String, Boolean> typingStatus = new HashMap<>(); // Track who's typing
-    private Timer typingTimer; // Auto-stop typing after 3 seconds
+    private Label typingLabel;
+    private Label statusLabel; // Online/Offline status label
+    private Circle statusIndicator; // Green/Red dot
+    private Map<String, Boolean> typingStatus = new HashMap<>();
+    private Map<String, Boolean> onlineStatus = new HashMap<>(); // Track online status
+    private Timer typingTimer;
     private ObservableList<ChatPreview> chats = FXCollections.observableArrayList();
     private Map<String, ObservableList<MessageItem>> conversationHistory = new HashMap<>();
     private Map<String, Integer> unreadCounts = new HashMap<>();
@@ -120,6 +123,7 @@ public class ChatClient extends Application {
                 isConnected = true;
                 startMessageReceiver();
                 out.println("GET_HISTORY:" + currentUsername);
+                out.println("GET_ALL_STATUS"); // Get status of all users
                 loadAllUnreadCounts();
                 showChatListScreen();
             } else {
@@ -211,6 +215,8 @@ public class ChatClient extends Application {
                 int unread = unreadCounts.getOrDefault(user, 0);
                 chat.setUnread(unread > 0);
                 chat.setUnreadCount(unread);
+                boolean isOnline = onlineStatus.getOrDefault(user, false);
+                chat.setOnline(isOnline);
                 chats.add(chat);
 
                 if (!conversationHistory.containsKey(user)) {
@@ -240,6 +246,8 @@ public class ChatClient extends Application {
                 int unread = unreadCounts.getOrDefault(user, 0);
                 chat.setUnread(unread > 0);
                 chat.setUnreadCount(unread);
+                boolean isOnline = onlineStatus.getOrDefault(user, false);
+                chat.setOnline(isOnline);
 
                 chatList.add(chat);
 
@@ -315,7 +323,6 @@ public class ChatClient extends Application {
             }
         });
 
-        // Typing indicator label
         typingLabel = new Label("");
         typingLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #8696A0; -fx-padding: 5px 10px;");
 
@@ -335,11 +342,18 @@ public class ChatClient extends Application {
         Label contactLabel = new Label(contactName);
         contactLabel.setStyle("-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: #E9EDEF;");
 
-        Label statusLabel = new Label("Online");
-        statusLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #8696A0;");
+        statusIndicator = new Circle(6);
+        boolean isOnline = onlineStatus.getOrDefault(contactName, false);
+        statusIndicator.setFill(isOnline ? Color.web("#31A24C") : Color.web("#808080")); // Green or Gray
+        
+        statusLabel = new Label(isOnline ? "Online" : "Offline");
+        statusLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: " + (isOnline ? "#31A24C" : "#8696A0") + ";");
+
+        HBox statusBox = new HBox(5);
+        statusBox.getChildren().addAll(statusIndicator, statusLabel);
 
         VBox contactInfo = new VBox(2);
-        contactInfo.getChildren().addAll(contactLabel, statusLabel);
+        contactInfo.getChildren().addAll(contactLabel, statusBox);
 
         Button backButton = new Button("[Back]");
         backButton.setStyle("-fx-font-size: 12px; -fx-background-color: transparent; -fx-text-fill: #25D366;");
@@ -367,13 +381,10 @@ public class ChatClient extends Application {
         inputField.setStyle("-fx-font-size: 12px; -fx-padding: 10px; -fx-background-color: #1F2C33; -fx-text-fill: #E9EDEF;");
         inputField.setOnAction(e -> sendMessage(inputField, contactName, messages));
         
-        // Send TYPING indicator on text change
         inputField.textProperty().addListener((obs, oldVal, newVal) -> {
             if (!newVal.isEmpty() && oldVal.isEmpty()) {
-                // Started typing
                 out.println("TYPING:" + contactName);
                 
-                // Auto-stop typing after 3 seconds of inactivity
                 if (typingTimer != null) {
                     typingTimer.cancel();
                 }
@@ -439,8 +450,49 @@ public class ChatClient extends Application {
                 String message;
                 while (isConnected && (message = in.readLine()) != null) {
                     
+                    // Handle user status update (real-time)
+                    if (message.startsWith("USER_STATUS:")) {
+                        String[] parts = message.split(":");
+                        if (parts.length == 3) {
+                            String user = parts[1];
+                            String status = parts[2];
+                            boolean isOnline = "ONLINE".equals(status);
+                            onlineStatus.put(user, isOnline);
+                            
+                            Platform.runLater(() -> {
+                                if (currentChatContact != null && currentChatContact.equals(user)) {
+                                    // Update the status label in chat window
+                                    if (statusIndicator != null && statusLabel != null) {
+                                        statusIndicator.setFill(isOnline ? Color.web("#31A24C") : Color.web("#808080"));
+                                        statusLabel.setText(isOnline ? "Online" : "Offline");
+                                        statusLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: " + (isOnline ? "#31A24C" : "#8696A0") + ";");
+                                    }
+                                }
+                                loadChats(); // Refresh chat list
+                            });
+                        }
+                    }
+                    
+                    // Handle all status response
+                    else if (message.startsWith("ALL_STATUS:")) {
+                        String data = message.substring(11);
+                        Platform.runLater(() -> {
+                            for (String item : data.split(";")) {
+                                if (!item.isEmpty()) {
+                                    String[] parts = item.split(":");
+                                    if (parts.length == 2) {
+                                        String user = parts[0];
+                                        boolean isOnline = "ONLINE".equals(parts[1]);
+                                        onlineStatus.put(user, isOnline);
+                                    }
+                                }
+                            }
+                            loadChats();
+                        });
+                    }
+                    
                     // Handle typing start
-                    if (message.startsWith("TYPING_START:")) {
+                    else if (message.startsWith("TYPING_START:")) {
                         String[] parts = message.split(":", 2);
                         String sender = parts[1];
                         Platform.runLater(() -> {
@@ -718,6 +770,7 @@ public class ChatClient extends Application {
         private Label messageLabel;
         private Label timeLabel;
         private Label unreadBadge;
+        private Circle onlineIndicator;
 
         public ChatPreviewCell() {
             nameLabel = new Label();
@@ -731,6 +784,8 @@ public class ChatClient extends Application {
 
             unreadBadge = new Label();
             unreadBadge.setStyle("-fx-background-color: #25D366; -fx-text-fill: white; -fx-padding: 2px 6px; -fx-font-size: 10px;");
+
+            onlineIndicator = new Circle(5);
 
             VBox leftBox = new VBox(3);
             leftBox.getChildren().addAll(nameLabel, messageLabel);
@@ -758,6 +813,9 @@ public class ChatClient extends Application {
 
                 StackPane profilePic = ChatClient.createProfilePictureStatic(item.getContactName(), 45);
 
+                // Online indicator
+                onlineIndicator.setFill(item.isOnline() ? Color.web("#31A24C") : Color.web("#808080")); // Green or Gray
+
                 VBox textBox = new VBox(3);
                 textBox.getChildren().addAll(nameLabel, messageLabel);
 
@@ -765,7 +823,7 @@ public class ChatClient extends Application {
                 HBox.setHgrow(spacer, Priority.ALWAYS);
 
                 container.getChildren().clear();
-                container.getChildren().addAll(profilePic, textBox, spacer, timeLabel);
+                container.getChildren().addAll(profilePic, textBox, spacer, onlineIndicator, timeLabel);
 
                 if (item.hasUnread() && item.getUnreadCount() > 0) {
                     nameLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #25D366;");
@@ -789,6 +847,7 @@ public class ChatClient extends Application {
         private String timestamp;
         private boolean hasUnread = false;
         private int unreadCount = 0;
+        private boolean isOnline = false;
 
         public ChatPreview(String contactName, String lastMessage, String timestamp) {
             this.contactName = contactName;
@@ -801,11 +860,13 @@ public class ChatClient extends Application {
         public String getTimestamp() { return timestamp; }
         public boolean hasUnread() { return hasUnread; }
         public int getUnreadCount() { return unreadCount; }
+        public boolean isOnline() { return isOnline; }
 
         public void setLastMessage(String lastMessage) { this.lastMessage = lastMessage; }
         public void setTimestamp(String timestamp) { this.timestamp = timestamp; }
         public void setUnread(boolean unread) { this.hasUnread = unread; }
         public void setUnreadCount(int count) { this.unreadCount = count; }
+        public void setOnline(boolean online) { this.isOnline = online; }
     }
 
     class MessageItem {

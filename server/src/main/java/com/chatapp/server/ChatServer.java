@@ -60,13 +60,37 @@ public class ChatServer {
                         clients.put(username, this);
                         out.println("SUCCESS");
                         System.out.println(username + " logged in.");
+                        
+                        // Broadcast online status to all other users
+                        broadcastUserStatus(username, "ONLINE");
 
                         // Listen for messages
                         String clientMsg;
                         while ((clientMsg = in.readLine()) != null) {
                             
+                            // Handle GET_ONLINE_STATUS command
+                            if (clientMsg.startsWith("GET_ONLINE_STATUS:")) {
+                                String[] parts2 = clientMsg.split(":", 2);
+                                String targetUser = parts2[1];
+                                boolean isOnline = clients.containsKey(targetUser);
+                                out.println("ONLINE_STATUS:" + targetUser + ":" + (isOnline ? "ONLINE" : "OFFLINE"));
+                            }
+                            
+                            // Handle GET_ALL_STATUS command (get status of all users)
+                            else if (clientMsg.equals("GET_ALL_STATUS")) {
+                                String[] allUsers = {"haritha", "aakash", "kaniska", "kabilan", "srivinay"};
+                                StringBuilder statusData = new StringBuilder();
+                                for (String user : allUsers) {
+                                    if (!user.equals(username)) {
+                                        boolean isOnline = clients.containsKey(user);
+                                        statusData.append(user).append(":").append(isOnline ? "ONLINE" : "OFFLINE").append(";");
+                                    }
+                                }
+                                out.println("ALL_STATUS:" + statusData.toString());
+                            }
+                            
                             // Handle TYPING indicator
-                            if (clientMsg.startsWith("TYPING:")) {
+                            else if (clientMsg.startsWith("TYPING:")) {
                                 String[] parts2 = clientMsg.split(":", 2);
                                 String recipient = parts2[1];
                                 ClientHandler recipientHandler = clients.get(recipient);
@@ -149,10 +173,19 @@ public class ChatServer {
             } finally {
                 if (username != null) {
                     clients.remove(username);
+                    // Broadcast offline status
+                    broadcastUserStatus(username, "OFFLINE");
                 }
                 try {
                     socket.close();
                 } catch (Exception ignored) {}
+            }
+        }
+
+        private void broadcastUserStatus(String user, String status) {
+            String message = "USER_STATUS:" + user + ":" + status;
+            for (ClientHandler client : clients.values()) {
+                client.sendMessage(message);
             }
         }
 
