@@ -36,6 +36,7 @@ public class ChatClient extends Application {
     private ListView<MessageItem> messagesListView;
     private ObservableList<ChatPreview> chats = FXCollections.observableArrayList();
     private Map<String, ObservableList<MessageItem>> conversationHistory = new HashMap<>();
+    private Map<String, Integer> unreadCounts = new HashMap<>();
     private Thread messageReceiver;
     private boolean isConnected = false;
 
@@ -94,7 +95,6 @@ public class ChatClient extends Application {
         loginBox.getChildren().addAll(titleLabel, usernameField, passwordField, loginButton, credentialsLabel);
 
         Scene loginScene = new Scene(loginBox, 400, 350);
-        loginScene.getStylesheets().add(getClass().getResource("/whatsapp-style.css").toExternalForm());
         primaryStage.setScene(loginScene);
     }
 
@@ -116,6 +116,7 @@ public class ChatClient extends Application {
             if ("SUCCESS".equals(response)) {
                 isConnected = true;
                 startMessageReceiver();
+                loadAllUnreadCounts();
                 showChatListScreen();
             } else {
                 showAlert("Login Failed", "Invalid credentials");
@@ -142,6 +143,7 @@ public class ChatClient extends Application {
             ChatPreview selected = chatListView.getSelectionModel().getSelectedItem();
             if (selected != null) {
                 currentChatContact = selected.getContactName();
+                markMessagesAsRead(selected.getContactName());
                 showChatWindow(selected.getContactName());
             }
         });
@@ -153,7 +155,6 @@ public class ChatClient extends Application {
         mainLayout.getChildren().addAll(topBar, new Separator(), chatListView);
 
         Scene chatListScene = new Scene(mainLayout, 450, 700);
-        chatListScene.getStylesheets().add(getClass().getResource("/whatsapp-style.css").toExternalForm());
         primaryStage.setScene(chatListScene);
     }
 
@@ -165,7 +166,6 @@ public class ChatClient extends Application {
         searchField.setPromptText("Search contacts...");
         searchField.setStyle("-fx-font-size: 12px; -fx-padding: 8px; -fx-background-color: #1F2C33; -fx-text-fill: #E9EDEF; -fx-prompt-text-fill: #8696A0;");
         searchField.setPrefWidth(150);
-
         searchField.textProperty().addListener((obs, oldVal, newVal) -> filterChats(newVal));
 
         Button logoutButton = new Button("Logout");
@@ -194,12 +194,9 @@ public class ChatClient extends Application {
 
         for (String user : defaultUsers) {
             if (!user.equals(currentUsername) && user.toLowerCase().contains(searchLower)) {
-                ObservableList<MessageItem> messages =
-                    conversationHistory.getOrDefault(user, FXCollections.observableArrayList());
-
+                ObservableList<MessageItem> messages = conversationHistory.getOrDefault(user, FXCollections.observableArrayList());
                 String lastMessage = "Click to open chat...";
                 String lastTimestamp = "0:00 am";
-                
                 if (!messages.isEmpty()) {
                     MessageItem lastMsg = messages.get(messages.size() - 1);
                     lastMessage = lastMsg.getContent();
@@ -207,6 +204,9 @@ public class ChatClient extends Application {
                 }
 
                 ChatPreview chat = new ChatPreview(user, lastMessage, lastTimestamp);
+                int unread = unreadCounts.getOrDefault(user, 0);
+                chat.setUnread(unread > 0);
+                chat.setUnreadCount(unread);
                 chats.add(chat);
 
                 if (!conversationHistory.containsKey(user)) {
@@ -216,67 +216,80 @@ public class ChatClient extends Application {
         }
     }
 
-private void loadChats() {
-    chats.clear();
-    String[] defaultUsers = {"haritha", "aakash", "kaniska", "kabilan", "srivinay"};
+    private void loadChats() {
+        chats.clear();
+        String[] defaultUsers = {"haritha", "aakash", "kaniska", "kabilan", "srivinay"};
+        List<ChatPreview> chatList = new ArrayList<>();
 
-    List<ChatPreview> chatList = new ArrayList<>();
-    for (String user : defaultUsers) {
-        if (!user.equals(currentUsername)) {
-            ObservableList<MessageItem> messages =
-                conversationHistory.getOrDefault(user, FXCollections.observableArrayList());
+        for (String user : defaultUsers) {
+            if (!user.equals(currentUsername)) {
+                ObservableList<MessageItem> messages = conversationHistory.getOrDefault(user, FXCollections.observableArrayList());
+                String lastMessage = "Click to open chat...";
+                String lastTimestamp = "0:00 am";
+                if (!messages.isEmpty()) {
+                    MessageItem lastMsg = messages.get(messages.size() - 1);
+                    lastMessage = lastMsg.getContent();
+                    lastTimestamp = lastMsg.getTimestamp();
+                }
 
-            String lastMessage = "Click to open chat...";
-            String lastTimestamp = "0:00 am";
-            
-            if (!messages.isEmpty()) {
-                MessageItem lastMsg = messages.get(messages.size() - 1);
-                lastMessage = lastMsg.getContent();
-                lastTimestamp = lastMsg.getTimestamp();
-            }
+                ChatPreview chat = new ChatPreview(user, lastMessage, lastTimestamp);
+                int unread = unreadCounts.getOrDefault(user, 0);
+                chat.setUnread(unread > 0);
+                chat.setUnreadCount(unread);
 
-            ChatPreview chat = new ChatPreview(user, lastMessage, lastTimestamp);
-            chat.setUnread(false); // Always false on load
-            chatList.add(chat);
+                chatList.add(chat);
 
-            if (!conversationHistory.containsKey(user)) {
-                conversationHistory.put(user, messages);
+                if (!conversationHistory.containsKey(user)) {
+                    conversationHistory.put(user, messages);
+                }
             }
         }
+
+        chatList.sort((a, b) -> {
+            ObservableList<MessageItem> aMessages = conversationHistory.get(a.getContactName());
+            ObservableList<MessageItem> bMessages = conversationHistory.get(b.getContactName());
+
+            if (aMessages.isEmpty() && bMessages.isEmpty()) return 0;
+            if (aMessages.isEmpty()) return 1;
+            if (bMessages.isEmpty()) return -1;
+
+            SimpleDateFormat sdf = new SimpleDateFormat("h:mm a");
+            try {
+                Date aTime = sdf.parse(aMessages.get(aMessages.size() - 1).getTimestamp());
+                Date bTime = sdf.parse(bMessages.get(bMessages.size() - 1).getTimestamp());
+                return bTime.compareTo(aTime);
+            } catch (Exception e) {
+                return 0;
+            }
+        });
+
+        chats.addAll(chatList);
     }
 
-    chatList.sort((a, b) -> {
-        ObservableList<MessageItem> aMessages = conversationHistory.get(a.getContactName());
-        ObservableList<MessageItem> bMessages = conversationHistory.get(b.getContactName());
+    private void loadAllUnreadCounts() {
+        out.println("GET_ALL_UNREAD");
+    }
 
-        if (aMessages.isEmpty() && bMessages.isEmpty()) return 0;
-        if (aMessages.isEmpty()) return 1;
-        if (bMessages.isEmpty()) return -1;
-
-        SimpleDateFormat sdf = new SimpleDateFormat("h:mm a");
-        try {
-            Date aTime = sdf.parse(aMessages.get(aMessages.size() - 1).getTimestamp());
-            Date bTime = sdf.parse(bMessages.get(bMessages.size() - 1).getTimestamp());
-            return bTime.compareTo(aTime);
-        } catch (Exception e) {
-            return 0;
-        }
-    });
-
-    chats.addAll(chatList);
-}
-
+    private void markMessagesAsRead(String contactName) {
+        out.println("MARK_READ:" + contactName);
+        unreadCounts.put(contactName, 0);
+        
+        Platform.runLater(() -> {
+            for (ChatPreview chat : chats) {
+                if (chat.getContactName().equals(contactName)) {
+                    chat.setUnread(false);
+                    chat.setUnreadCount(0);
+                    break;
+                }
+            }
+            if (chatListView != null) {
+                chatListView.refresh();
+            }
+        });
+    }
 
     private void showChatWindow(String contactName) {
         currentChatContact = contactName;
-
-        for (ChatPreview chat : chats) {
-            if (chat.getContactName().equals(contactName)) {
-                chat.setUnread(false);
-                chatListView.refresh();
-                break;
-            }
-        }
 
         primaryStage.setWidth(500);
         primaryStage.setHeight(700);
@@ -286,10 +299,8 @@ private void loadChats() {
 
         messagesListView = new ListView<>();
         messagesListView.setCellFactory(param -> new MessageCell());
-
         ObservableList<MessageItem> messages = conversationHistory.getOrDefault(contactName, FXCollections.observableArrayList());
         conversationHistory.put(contactName, messages);
-
         messagesListView.setItems(messages);
         messagesListView.setStyle("-fx-background-color: #0B141A; -fx-control-inner-background: #0B141A;");
         VBox.setVgrow(messagesListView, Priority.ALWAYS);
@@ -307,7 +318,6 @@ private void loadChats() {
         chatLayout.getChildren().addAll(chatTopBar, new Separator(), messagesListView, inputBox);
 
         Scene chatScene = new Scene(chatLayout, 500, 700);
-        chatScene.getStylesheets().add(getClass().getResource("/whatsapp-style.css").toExternalForm());
         primaryStage.setScene(chatScene);
     }
 
@@ -325,7 +335,10 @@ private void loadChats() {
 
         Button backButton = new Button("[Back]");
         backButton.setStyle("-fx-font-size: 12px; -fx-background-color: transparent; -fx-text-fill: #25D366;");
-        backButton.setOnAction(e -> showChatListScreen());
+        backButton.setOnAction(e -> {
+            currentChatContact = null;
+            showChatListScreen();
+        });
 
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -341,7 +354,6 @@ private void loadChats() {
         TextField inputField = new TextField();
         inputField.setPromptText("Type a message...");
         inputField.setStyle("-fx-font-size: 12px; -fx-padding: 10px; -fx-background-color: #1F2C33; -fx-text-fill: #E9EDEF;");
-
         inputField.setOnAction(e -> sendMessage(inputField, contactName, messages));
         HBox.setHgrow(inputField, Priority.ALWAYS);
 
@@ -383,73 +395,128 @@ private void loadChats() {
         }
     }
 
-private void startMessageReceiver() {
-    messageReceiver = new Thread(() -> {
-        try {
-            String message;
-            while (isConnected && (message = in.readLine()) != null) {
-                if (message.startsWith("[")) {
-                    int firstCloseBracket = message.indexOf("]");
-                    String timeAndMessage = message.substring(firstCloseBracket + 2);
-                    int colonIndex = timeAndMessage.indexOf(": ");
-                    if (colonIndex > -1) {
-                        String sender = timeAndMessage.substring(0, colonIndex);
-                        String content = timeAndMessage.substring(colonIndex + 2);
-                        String time = message.substring(1, firstCloseBracket);
-
+    private void startMessageReceiver() {
+        messageReceiver = new Thread(() -> {
+            try {
+                String message;
+                while (isConnected && (message = in.readLine()) != null) {
+                    
+                    // Handle unread counts response
+                    if (message.startsWith("ALL_UNREAD:")) {
+                        String data = message.substring(11);
                         Platform.runLater(() -> {
-                            ObservableList<MessageItem> msgs = conversationHistory.get(sender);
-                            if (msgs == null) {
-                                msgs = FXCollections.observableArrayList();
-                                conversationHistory.put(sender, msgs);
-                            }
-                            MessageItem receivedMessage = new MessageItem(content, sender, false, time, true);
-                            msgs.add(receivedMessage);
-                            
-                            ChatPreview existingChat = null;
-                            for (ChatPreview chat : chats) {
-                                if (chat.getContactName().equals(sender)) {
-                                    existingChat = chat;
-                                    chat.setLastMessage(content);
-                                    chat.setTimestamp(time);
-                                    
-                                    // ONLY mark unread if NOT currently viewing this chat
-                                    if (currentChatContact == null || !currentChatContact.equals(sender)) {
-                                        chat.setUnread(true);
-                                    } else {
-                                        // If chat is open, mark as read
-                                        chat.setUnread(false);
+                            unreadCounts.clear();
+                            if (!data.isEmpty()) {
+                                for (String item : data.split(";")) {
+                                    if (!item.isEmpty()) {
+                                        String[] parts = item.split(":");
+                                        if (parts.length == 2) {
+                                            String sender = parts[0];
+                                            try {
+                                                int count = Integer.parseInt(parts[1]);
+                                                unreadCounts.put(sender, count);
+                                            } catch (NumberFormatException e) {
+                                                System.out.println("Invalid unread count: " + parts[1]);
+                                            }
+                                        }
                                     }
-                                    break;
                                 }
                             }
-                            
-                            // If chat doesn't exist in list, add it
-                            if (existingChat == null) {
-                                ChatPreview newChat = new ChatPreview(sender, content, time);
-                                newChat.setUnread(currentChatContact == null || !currentChatContact.equals(sender));
-                                chats.add(newChat);
-                            }
-                            
-                            // Refresh UI
-                            if (currentChatContact != null && currentChatContact.equals(sender) && messagesListView != null) {
-                                messagesListView.refresh();
-                            }
-                            chatListView.refresh();
+                            loadChats();
                         });
                     }
+                    
+                    // Handle UNREAD_COUNT for single contact (when marking as read)
+                    else if (message.startsWith("UNREAD_COUNT:")) {
+                        String[] parts = message.split(":", 3);
+                        if (parts.length == 3) {
+                            String sender = parts[1];
+                            try {
+                                int count = Integer.parseInt(parts[2]);
+                                Platform.runLater(() -> {
+                                    unreadCounts.put(sender, count);
+                                    loadChats();
+                                });
+                            } catch (NumberFormatException e) {
+                                System.out.println("Invalid count format: " + parts[2]);
+                            }
+                        }
+                    }
+                    
+                    // Handle incoming messages
+                    else if (message.startsWith("RECEIVE:")) {
+                        String[] parts = message.split(":", 3);
+                        if (parts.length == 3) {
+                            String sender = parts[1];
+                            String fullMsg = parts[2];
+
+                            int firstCloseBracket = fullMsg.indexOf("]");
+                            if (firstCloseBracket > -1) {
+                                String timeAndMessage = fullMsg.substring(firstCloseBracket + 2);
+                                int colonIndex = timeAndMessage.indexOf(": ");
+
+                                if (colonIndex > -1) {
+                                    String content = timeAndMessage.substring(colonIndex + 2);
+                                    String time = fullMsg.substring(1, firstCloseBracket);
+
+                                    Platform.runLater(() -> {
+                                        ObservableList<MessageItem> msgs = conversationHistory.get(sender);
+                                        if (msgs == null) {
+                                            msgs = FXCollections.observableArrayList();
+                                            conversationHistory.put(sender, msgs);
+                                        }
+
+                                        MessageItem receivedMessage = new MessageItem(content, sender, false, time, true);
+                                        msgs.add(receivedMessage);
+
+                                        // Update chat list
+                                        ChatPreview existingChat = null;
+                                        for (ChatPreview chat : chats) {
+                                            if (chat.getContactName().equals(sender)) {
+                                                existingChat = chat;
+                                                chat.setLastMessage(content);
+                                                chat.setTimestamp(time);
+                                                break;
+                                            }
+                                        }
+
+                                        if (existingChat == null) {
+                                            ChatPreview newChat = new ChatPreview(sender, content, time);
+                                            newChat.setUnread(true);
+                                            newChat.setUnreadCount(1);
+                                            unreadCounts.put(sender, 1);
+                                            chats.add(newChat);
+                                        }
+
+                                        // If NOT viewing this chat, mark as unread
+                                        if (currentChatContact == null || !currentChatContact.equals(sender)) {
+                                            // Query server for updated unread count
+                                            out.println("GET_UNREAD_COUNT:" + sender);
+                                        } else {
+                                            // User IS viewing this chat, so auto-mark as read
+                                            markMessagesAsRead(sender);
+                                        }
+
+                                        if (currentChatContact != null && currentChatContact.equals(sender) && messagesListView != null) {
+                                            messagesListView.refresh();
+                                        }
+
+                                        chatListView.refresh();
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                if (isConnected) {
+                    System.err.println("[RECEIVER ERROR] " + e.getMessage());
                 }
             }
-        } catch (Exception e) {
-            if (isConnected) {
-                System.err.println("[RECEIVER ERROR] " + e.getMessage());
-            }
-        }
-    });
-    messageReceiver.setDaemon(true);
-    messageReceiver.start();
-}
-
+        });
+        messageReceiver.setDaemon(true);
+        messageReceiver.start();
+    }
 
     private String getCurrentTime() {
         SimpleDateFormat sdf = new SimpleDateFormat("h:mm a");
@@ -489,24 +556,20 @@ private void startMessageReceiver() {
             imageView.setFitWidth(size);
             imageView.setFitHeight(size);
             imageView.setPreserveRatio(true);
-
-            Circle clip = new Circle(size / 2);
-            clip.setCenterX(size / 2);
-            clip.setCenterY(size / 2);
+            Circle clip = new Circle(size / 2.0);
+            clip.setCenterX(size / 2.0);
+            clip.setCenterY(size / 2.0);
             imageView.setClip(clip);
-
             StackPane stack = new StackPane(imageView);
             stack.setPrefSize(size, size);
             return stack;
         } catch (Exception e) {
-            Circle circle = new Circle(size / 2);
+            Circle circle = new Circle(size / 2.0);
             String color = PROFILE_COLORS.getOrDefault(name.toLowerCase(), "#999999");
             circle.setFill(Color.web(color));
-
             Label initials = new Label(name.substring(0, 1).toUpperCase());
-            initials.setFont(new Font(size / 2));
+            initials.setFont(new Font(size / 2.0));
             initials.setTextFill(Color.WHITE);
-
             StackPane stack = new StackPane(circle, initials);
             stack.setPrefSize(size, size);
             return stack;
@@ -520,24 +583,20 @@ private void startMessageReceiver() {
             imageView.setFitWidth(size);
             imageView.setFitHeight(size);
             imageView.setPreserveRatio(true);
-
-            Circle clip = new Circle(size / 2);
-            clip.setCenterX(size / 2);
-            clip.setCenterY(size / 2);
+            Circle clip = new Circle(size / 2.0);
+            clip.setCenterX(size / 2.0);
+            clip.setCenterY(size / 2.0);
             imageView.setClip(clip);
-
             StackPane stack = new StackPane(imageView);
             stack.setPrefSize(size, size);
             return stack;
         } catch (Exception e) {
-            Circle circle = new Circle(size / 2);
+            Circle circle = new Circle(size / 2.0);
             String color = PROFILE_COLORS.getOrDefault(name.toLowerCase(), "#999999");
             circle.setFill(Color.web(color));
-
             Label initials = new Label(name.substring(0, 1).toUpperCase());
-            initials.setFont(new Font(size / 2));
+            initials.setFont(new Font(size / 2.0));
             initials.setTextFill(Color.WHITE);
-
             StackPane stack = new StackPane(circle, initials);
             stack.setPrefSize(size, size);
             return stack;
@@ -548,168 +607,176 @@ private void startMessageReceiver() {
     public void stop() {
         closeConnection();
     }
-}
 
-class ChatPreviewCell extends ListCell<ChatPreview> {
-    private HBox container;
-    private Label nameLabel;
-    private Label messageLabel;
-    private Label timeLabel;
+    class ChatPreviewCell extends ListCell<ChatPreview> {
+        private HBox container;
+        private Label nameLabel;
+        private Label messageLabel;
+        private Label timeLabel;
+        private Label unreadBadge;
 
-    public ChatPreviewCell() {
-        nameLabel = new Label();
-        nameLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #E9EDEF;");
+        public ChatPreviewCell() {
+            nameLabel = new Label();
+            nameLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #E9EDEF;");
 
-        messageLabel = new Label();
-        messageLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #8696A0;");
+            messageLabel = new Label();
+            messageLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #8696A0;");
 
-        timeLabel = new Label();
-        timeLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #8696A0;");
+            timeLabel = new Label();
+            timeLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #8696A0;");
 
-        VBox leftBox = new VBox(3);
-        leftBox.getChildren().addAll(nameLabel, messageLabel);
+            unreadBadge = new Label();
+            unreadBadge.setStyle("-fx-background-color: #25D366; -fx-text-fill: white; -fx-padding: 2px 6px; -fx-font-size: 10px;");
 
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-
-        container = new HBox(10);
-        container.setPadding(new Insets(10));
-        container.setStyle("-fx-background-color: #111B21; -fx-border-color: #1F2C33; -fx-border-width: 0 0 1 0;");
-
-        setOnMouseEntered(e -> container.setStyle("-fx-background-color: #202C33; -fx-border-color: #1F2C33; -fx-border-width: 0 0 1 0;"));
-        setOnMouseExited(e -> container.setStyle("-fx-background-color: #111B21; -fx-border-color: #1F2C33; -fx-border-width: 0 0 1 0;"));
-    }
-
-    @Override
-    protected void updateItem(ChatPreview item, boolean empty) {
-        super.updateItem(item, empty);
-        if (empty || item == null) {
-            setGraphic(null);
-        } else {
-            nameLabel.setText(item.getContactName());
-            messageLabel.setText(item.getLastMessage());
-            timeLabel.setText(item.getTimestamp());
-
-            StackPane profilePic = ChatClient.createProfilePictureStatic(item.getContactName(), 45);
-
-            VBox textBox = new VBox(3);
-            textBox.getChildren().addAll(nameLabel, messageLabel);
+            VBox leftBox = new VBox(3);
+            leftBox.getChildren().addAll(nameLabel, messageLabel);
 
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
 
-            container.getChildren().clear();
-            container.getChildren().addAll(profilePic, textBox, spacer, timeLabel);
+            container = new HBox(10);
+            container.setPadding(new Insets(10));
+            container.setStyle("-fx-background-color: #111B21; -fx-border-color: #1F2C33; -fx-border-width: 0 0 1 0;");
 
-            if (item.hasUnread()) {
-                nameLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #25D366;");
-                messageLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #25D366; -fx-font-weight: bold;");
+            setOnMouseEntered(e -> container.setStyle("-fx-background-color: #202C33; -fx-border-color: #1F2C33; -fx-border-width: 0 0 1 0;"));
+            setOnMouseExited(e -> container.setStyle("-fx-background-color: #111B21; -fx-border-color: #1F2C33; -fx-border-width: 0 0 1 0;"));
+        }
+
+        @Override
+        protected void updateItem(ChatPreview item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty || item == null) {
+                setGraphic(null);
             } else {
-                nameLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #E9EDEF;");
-                messageLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #8696A0;");
-            }
+                nameLabel.setText(item.getContactName());
+                messageLabel.setText(item.getLastMessage());
+                timeLabel.setText(item.getTimestamp());
 
-            setGraphic(container);
+                StackPane profilePic = ChatClient.createProfilePictureStatic(item.getContactName(), 45);
+
+                VBox textBox = new VBox(3);
+                textBox.getChildren().addAll(nameLabel, messageLabel);
+
+                Region spacer = new Region();
+                HBox.setHgrow(spacer, Priority.ALWAYS);
+
+                container.getChildren().clear();
+                container.getChildren().addAll(profilePic, textBox, spacer, timeLabel);
+
+                if (item.hasUnread() && item.getUnreadCount() > 0) {
+                    nameLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #25D366;");
+                    messageLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #25D366; -fx-font-weight: bold;");
+
+                    unreadBadge.setText(String.valueOf(item.getUnreadCount()));
+                    container.getChildren().add(container.getChildren().size() - 1, unreadBadge);
+                } else {
+                    nameLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #E9EDEF;");
+                    messageLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #8696A0;");
+                }
+
+                setGraphic(container);
+            }
         }
     }
-}
 
-class ChatPreview {
-    private String contactName;
-    private String lastMessage;
-    private String timestamp;
-    private boolean hasUnread = false;
+    class ChatPreview {
+        private String contactName;
+        private String lastMessage;
+        private String timestamp;
+        private boolean hasUnread = false;
+        private int unreadCount = 0;
 
-    public ChatPreview(String contactName, String lastMessage, String timestamp) {
-        this.contactName = contactName;
-        this.lastMessage = lastMessage;
-        this.timestamp = timestamp;
+        public ChatPreview(String contactName, String lastMessage, String timestamp) {
+            this.contactName = contactName;
+            this.lastMessage = lastMessage;
+            this.timestamp = timestamp;
+        }
+
+        public String getContactName() { return contactName; }
+        public String getLastMessage() { return lastMessage; }
+        public String getTimestamp() { return timestamp; }
+        public boolean hasUnread() { return hasUnread; }
+        public int getUnreadCount() { return unreadCount; }
+
+        public void setLastMessage(String lastMessage) { this.lastMessage = lastMessage; }
+        public void setTimestamp(String timestamp) { this.timestamp = timestamp; }
+        public void setUnread(boolean unread) { this.hasUnread = unread; }
+        public void setUnreadCount(int count) { this.unreadCount = count; }
     }
 
-    public String getContactName() { return contactName; }
-    public String getLastMessage() { return lastMessage; }
-    public String getTimestamp() { return timestamp; }
-    public boolean hasUnread() { return hasUnread; }
+    class MessageItem {
+        private String content;
+        private String sender;
+        private boolean isSent;
+        private String timestamp;
+        private boolean isDelivered;
 
-    public void setLastMessage(String lastMessage) { this.lastMessage = lastMessage; }
-    public void setTimestamp(String timestamp) { this.timestamp = timestamp; }
-    public void setUnread(boolean unread) { this.hasUnread = unread; }
-}
+        public MessageItem(String content, String sender, boolean isSent, String timestamp, boolean isDelivered) {
+            this.content = content;
+            this.sender = sender;
+            this.isSent = isSent;
+            this.timestamp = timestamp;
+            this.isDelivered = isDelivered;
+        }
 
-class MessageItem {
-    private String content;
-    private String sender;
-    private boolean isSent;
-    private String timestamp;
-    private boolean isDelivered;
+        public String getContent() { return content; }
+        public String getSender() { return sender; }
+        public boolean isSent() { return isSent; }
+        public String getTimestamp() { return timestamp; }
+        public boolean isDelivered() { return isDelivered; }
 
-    public MessageItem(String content, String sender, boolean isSent, String timestamp, boolean isDelivered) {
-        this.content = content;
-        this.sender = sender;
-        this.isSent = isSent;
-        this.timestamp = timestamp;
-        this.isDelivered = isDelivered;
+        public void setDelivered(boolean delivered) { this.isDelivered = delivered; }
     }
 
-    public String getContent() { return content; }
-    public String getSender() { return sender; }
-    public boolean isSent() { return isSent; }
-    public String getTimestamp() { return timestamp; }
-    public boolean isDelivered() { return isDelivered; }
-    public void setDelivered(boolean delivered) { this.isDelivered = delivered; }
-}
+    class MessageCell extends ListCell<MessageItem> {
+        private HBox container;
 
-class MessageCell extends ListCell<MessageItem> {
-    private HBox container;
-
-    @Override
-    protected void updateItem(MessageItem item, boolean empty) {
-        super.updateItem(item, empty);
-
-        if (empty || item == null) {
-            setGraphic(null);
-        } else {
-            VBox messageBox = new VBox(2);
-
-            HBox contentBox = new HBox(5);
-            contentBox.setAlignment(Pos.CENTER_LEFT);
-
-            Label contentLabel = new Label(item.getContent());
-            contentLabel.setWrapText(true);
-            contentLabel.setMaxWidth(300);
-
-            contentBox.getChildren().add(contentLabel);
-
-            Label timeLabel = new Label(item.getTimestamp());
-            timeLabel.setStyle("-fx-font-size: 9px;");
-
-            messageBox.getChildren().addAll(contentBox, timeLabel);
-
-            if (item.isSent()) {
-                contentLabel.setStyle("-fx-text-fill: white; -fx-padding: 8px 12px;");
-                timeLabel.setStyle("-fx-font-size: 9px; -fx-text-fill: #CCCCCC;");
-                messageBox.setStyle("-fx-background-color: #005C4B; -fx-background-radius: 10; -fx-padding: 0;");
-
-                container = new HBox();
-                container.setPadding(new Insets(5));
-                Region spacer = new Region();
-                HBox.setHgrow(spacer, Priority.ALWAYS);
-                container.getChildren().addAll(spacer, messageBox);
-                container.setStyle("-fx-background-color: #0B141A;");
+        @Override
+        protected void updateItem(MessageItem item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty || item == null) {
+                setGraphic(null);
             } else {
-                contentLabel.setStyle("-fx-text-fill: #E9EDEF; -fx-padding: 8px 12px;");
-                timeLabel.setStyle("-fx-font-size: 9px; -fx-text-fill: #8696A0;");
-                messageBox.setStyle("-fx-background-color: #1F2C33; -fx-background-radius: 10; -fx-padding: 0;");
+                VBox messageBox = new VBox(2);
+                HBox contentBox = new HBox(5);
+                contentBox.setAlignment(Pos.CENTER_LEFT);
 
-                container = new HBox();
-                container.setPadding(new Insets(5));
-                Region spacer = new Region();
-                HBox.setHgrow(spacer, Priority.ALWAYS);
-                container.getChildren().addAll(messageBox, spacer);
-                container.setStyle("-fx-background-color: #0B141A;");
+                Label contentLabel = new Label(item.getContent());
+                contentLabel.setWrapText(true);
+                contentLabel.setMaxWidth(300);
+                contentBox.getChildren().add(contentLabel);
+
+                Label timeLabel = new Label(item.getTimestamp());
+                timeLabel.setStyle("-fx-font-size: 9px;");
+
+                messageBox.getChildren().addAll(contentBox, timeLabel);
+
+                if (item.isSent()) {
+                    contentLabel.setStyle("-fx-text-fill: white; -fx-padding: 8px 12px;");
+                    timeLabel.setStyle("-fx-font-size: 9px; -fx-text-fill: #CCCCCC;");
+                    messageBox.setStyle("-fx-background-color: #005C4B; -fx-background-radius: 10; -fx-padding: 0;");
+
+                    container = new HBox();
+                    container.setPadding(new Insets(5));
+                    Region spacer = new Region();
+                    HBox.setHgrow(spacer, Priority.ALWAYS);
+                    container.getChildren().addAll(spacer, messageBox);
+                    container.setStyle("-fx-background-color: #0B141A;");
+                } else {
+                    contentLabel.setStyle("-fx-text-fill: #E9EDEF; -fx-padding: 8px 12px;");
+                    timeLabel.setStyle("-fx-font-size: 9px; -fx-text-fill: #8696A0;");
+                    messageBox.setStyle("-fx-background-color: #1F2C33; -fx-background-radius: 10; -fx-padding: 0;");
+
+                    container = new HBox();
+                    container.setPadding(new Insets(5));
+                    Region spacer = new Region();
+                    HBox.setHgrow(spacer, Priority.ALWAYS);
+                    container.getChildren().addAll(messageBox, spacer);
+                    container.setStyle("-fx-background-color: #0B141A;");
+                }
+
+                setGraphic(container);
             }
-
-            setGraphic(container);
         }
     }
 }
