@@ -34,6 +34,9 @@ public class ChatClient extends Application {
     private Stage primaryStage;
     private ListView<ChatPreview> chatListView;
     private ListView<MessageItem> messagesListView;
+    private Label typingLabel; // Typing indicator label
+    private Map<String, Boolean> typingStatus = new HashMap<>(); // Track who's typing
+    private Timer typingTimer; // Auto-stop typing after 3 seconds
     private ObservableList<ChatPreview> chats = FXCollections.observableArrayList();
     private Map<String, ObservableList<MessageItem>> conversationHistory = new HashMap<>();
     private Map<String, Integer> unreadCounts = new HashMap<>();
@@ -116,11 +119,7 @@ public class ChatClient extends Application {
             if ("SUCCESS".equals(response)) {
                 isConnected = true;
                 startMessageReceiver();
-                
-                // Fetch offline messages
                 out.println("GET_HISTORY:" + currentUsername);
-                
-                // Then load unread counts
                 loadAllUnreadCounts();
                 showChatListScreen();
             } else {
@@ -316,11 +315,15 @@ public class ChatClient extends Application {
             }
         });
 
+        // Typing indicator label
+        typingLabel = new Label("");
+        typingLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #8696A0; -fx-padding: 5px 10px;");
+
         HBox inputBox = createInputBox(contactName, messages);
 
         VBox chatLayout = new VBox(0);
         chatLayout.setStyle("-fx-background-color: #0B141A;");
-        chatLayout.getChildren().addAll(chatTopBar, new Separator(), messagesListView, inputBox);
+        chatLayout.getChildren().addAll(chatTopBar, new Separator(), messagesListView, typingLabel, inputBox);
 
         Scene chatScene = new Scene(chatLayout, 500, 700);
         primaryStage.setScene(chatScene);
@@ -342,6 +345,9 @@ public class ChatClient extends Application {
         backButton.setStyle("-fx-font-size: 12px; -fx-background-color: transparent; -fx-text-fill: #25D366;");
         backButton.setOnAction(e -> {
             currentChatContact = null;
+            if (typingTimer != null) {
+                typingTimer.cancel();
+            }
             showChatListScreen();
         });
 
@@ -360,11 +366,38 @@ public class ChatClient extends Application {
         inputField.setPromptText("Type a message...");
         inputField.setStyle("-fx-font-size: 12px; -fx-padding: 10px; -fx-background-color: #1F2C33; -fx-text-fill: #E9EDEF;");
         inputField.setOnAction(e -> sendMessage(inputField, contactName, messages));
+        
+        // Send TYPING indicator on text change
+        inputField.textProperty().addListener((obs, oldVal, newVal) -> {
+            if (!newVal.isEmpty() && oldVal.isEmpty()) {
+                // Started typing
+                out.println("TYPING:" + contactName);
+                
+                // Auto-stop typing after 3 seconds of inactivity
+                if (typingTimer != null) {
+                    typingTimer.cancel();
+                }
+                typingTimer = new Timer();
+                typingTimer.schedule(new TimerTask() {
+                    @Override
+                    public void run() {
+                        out.println("STOP_TYPING:" + contactName);
+                    }
+                }, 3000);
+            }
+        });
+        
         HBox.setHgrow(inputField, Priority.ALWAYS);
 
         Button sendButton = new Button("Send");
         sendButton.setStyle("-fx-background-color: #25D366; -fx-text-fill: white; -fx-padding: 8px 16px;");
-        sendButton.setOnAction(e -> sendMessage(inputField, contactName, messages));
+        sendButton.setOnAction(e -> {
+            sendMessage(inputField, contactName, messages);
+            if (typingTimer != null) {
+                typingTimer.cancel();
+            }
+            out.println("STOP_TYPING:" + contactName);
+        });
 
         HBox inputBox = new HBox(8);
         inputBox.setStyle("-fx-background-color: #111B21; -fx-padding: 10;");
@@ -406,8 +439,32 @@ public class ChatClient extends Application {
                 String message;
                 while (isConnected && (message = in.readLine()) != null) {
                     
-                    // Handle history response (offline messages)
-                    if (message.startsWith("HISTORY:")) {
+                    // Handle typing start
+                    if (message.startsWith("TYPING_START:")) {
+                        String[] parts = message.split(":", 2);
+                        String sender = parts[1];
+                        Platform.runLater(() -> {
+                            if (currentChatContact != null && currentChatContact.equals(sender)) {
+                                typingLabel.setText(sender + " is typing...");
+                                typingStatus.put(sender, true);
+                            }
+                        });
+                    }
+                    
+                    // Handle typing stop
+                    else if (message.startsWith("TYPING_STOP:")) {
+                        String[] parts = message.split(":", 2);
+                        String sender = parts[1];
+                        Platform.runLater(() -> {
+                            if (currentChatContact != null && currentChatContact.equals(sender)) {
+                                typingLabel.setText("");
+                                typingStatus.put(sender, false);
+                            }
+                        });
+                    }
+                    
+                    // Handle history response
+                    else if (message.startsWith("HISTORY:")) {
                         String data = message.substring(8);
                         if (!data.isEmpty()) {
                             Platform.runLater(() -> {
@@ -418,7 +475,6 @@ public class ChatClient extends Application {
                                             String sender = parts[0];
                                             String content = parts[1];
                                             String time = parts[2];
-                                            // parts[3] is read status (not needed for display)
                                             
                                             ObservableList<MessageItem> msgs = conversationHistory.get(sender);
                                             if (msgs == null) {
@@ -429,7 +485,6 @@ public class ChatClient extends Application {
                                             MessageItem historyMsg = new MessageItem(content, sender, false, time, true);
                                             msgs.add(historyMsg);
                                             
-                                            // Update chat preview
                                             ChatPreview existingChat = null;
                                             for (ChatPreview chat : chats) {
                                                 if (chat.getContactName().equals(sender)) {
@@ -452,7 +507,7 @@ public class ChatClient extends Application {
                         }
                     }
                     
-                    // Handle unread counts response
+                    // Handle unread counts
                     else if (message.startsWith("ALL_UNREAD:")) {
                         String data = message.substring(11);
                         Platform.runLater(() -> {
@@ -477,7 +532,6 @@ public class ChatClient extends Application {
                         });
                     }
                     
-                    // Handle UNREAD_COUNT for single contact
                     else if (message.startsWith("UNREAD_COUNT:")) {
                         String[] parts = message.split(":", 3);
                         if (parts.length == 3) {
@@ -586,6 +640,9 @@ public class ChatClient extends Application {
     private void closeConnection() {
         if (isConnected) {
             isConnected = false;
+            if (typingTimer != null) {
+                typingTimer.cancel();
+            }
             try {
                 if (out != null) out.close();
                 if (in != null) in.close();

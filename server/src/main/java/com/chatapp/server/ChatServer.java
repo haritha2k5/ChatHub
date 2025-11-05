@@ -65,8 +65,29 @@ public class ChatServer {
                         String clientMsg;
                         while ((clientMsg = in.readLine()) != null) {
                             
+                            // Handle TYPING indicator
+                            if (clientMsg.startsWith("TYPING:")) {
+                                String[] parts2 = clientMsg.split(":", 2);
+                                String recipient = parts2[1];
+                                ClientHandler recipientHandler = clients.get(recipient);
+                                if (recipientHandler != null) {
+                                    recipientHandler.sendMessage("TYPING_START:" + username);
+                                    System.out.println(username + " is typing to " + recipient);
+                                }
+                            }
+                            
+                            // Handle STOP_TYPING indicator
+                            else if (clientMsg.startsWith("STOP_TYPING:")) {
+                                String[] parts2 = clientMsg.split(":", 2);
+                                String recipient = parts2[1];
+                                ClientHandler recipientHandler = clients.get(recipient);
+                                if (recipientHandler != null) {
+                                    recipientHandler.sendMessage("TYPING_STOP:" + username);
+                                }
+                            }
+                            
                             // Handle GET_HISTORY command (fetch offline messages)
-                            if (clientMsg.startsWith("GET_HISTORY:")) {
+                            else if (clientMsg.startsWith("GET_HISTORY:")) {
                                 String[] parts2 = clientMsg.split(":", 2);
                                 String recipient = parts2[1];
                                 String history = getMessageHistory(recipient);
@@ -107,11 +128,12 @@ public class ChatServer {
                                     // Save to database
                                     saveMessageToDatabase(username, recipient, msgText);
 
-                                    // Send to recipient if online
+                                    // Stop typing indicator when message is sent
                                     ClientHandler recipientHandler = clients.get(recipient);
                                     if (recipientHandler != null) {
                                         String fullMsg = "[" + getCurrentTime() + "] " + username + ": " + msgText;
                                         recipientHandler.sendMessage("RECEIVE:" + username + ":" + fullMsg);
+                                        recipientHandler.sendMessage("TYPING_STOP:" + username);
                                     }
                                 }
                             }
@@ -146,7 +168,6 @@ public class ChatServer {
                             String content = rs.getString("content");
                             String timestamp = rs.getString("timestamp");
                             
-                            // Format: sender###content###timestamp###read_status|sender###...
                             history.append(sender).append("###")
                                    .append(content).append("###")
                                    .append(formatTimestamp(timestamp)).append("###")
@@ -162,8 +183,6 @@ public class ChatServer {
 
         private String formatTimestamp(String dbTimestamp) {
             try {
-                // DB format: 2025-11-05 15:30:45.123
-                // Convert to: 3:30 pm
                 if (dbTimestamp != null && dbTimestamp.length() >= 19) {
                     String time = dbTimestamp.substring(11, 19);
                     String[] parts = time.split(":");
