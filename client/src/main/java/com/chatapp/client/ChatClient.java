@@ -116,6 +116,11 @@ public class ChatClient extends Application {
             if ("SUCCESS".equals(response)) {
                 isConnected = true;
                 startMessageReceiver();
+                
+                // Fetch offline messages
+                out.println("GET_HISTORY:" + currentUsername);
+                
+                // Then load unread counts
                 loadAllUnreadCounts();
                 showChatListScreen();
             } else {
@@ -401,8 +406,54 @@ public class ChatClient extends Application {
                 String message;
                 while (isConnected && (message = in.readLine()) != null) {
                     
+                    // Handle history response (offline messages)
+                    if (message.startsWith("HISTORY:")) {
+                        String data = message.substring(8);
+                        if (!data.isEmpty()) {
+                            Platform.runLater(() -> {
+                                for (String msgData : data.split("\\|")) {
+                                    if (!msgData.isEmpty()) {
+                                        String[] parts = msgData.split("###");
+                                        if (parts.length == 4) {
+                                            String sender = parts[0];
+                                            String content = parts[1];
+                                            String time = parts[2];
+                                            // parts[3] is read status (not needed for display)
+                                            
+                                            ObservableList<MessageItem> msgs = conversationHistory.get(sender);
+                                            if (msgs == null) {
+                                                msgs = FXCollections.observableArrayList();
+                                                conversationHistory.put(sender, msgs);
+                                            }
+                                            
+                                            MessageItem historyMsg = new MessageItem(content, sender, false, time, true);
+                                            msgs.add(historyMsg);
+                                            
+                                            // Update chat preview
+                                            ChatPreview existingChat = null;
+                                            for (ChatPreview chat : chats) {
+                                                if (chat.getContactName().equals(sender)) {
+                                                    existingChat = chat;
+                                                    chat.setLastMessage(content);
+                                                    chat.setTimestamp(time);
+                                                    break;
+                                                }
+                                            }
+                                            
+                                            if (existingChat == null) {
+                                                ChatPreview newChat = new ChatPreview(sender, content, time);
+                                                chats.add(newChat);
+                                            }
+                                        }
+                                    }
+                                }
+                                loadChats();
+                            });
+                        }
+                    }
+                    
                     // Handle unread counts response
-                    if (message.startsWith("ALL_UNREAD:")) {
+                    else if (message.startsWith("ALL_UNREAD:")) {
                         String data = message.substring(11);
                         Platform.runLater(() -> {
                             unreadCounts.clear();
@@ -426,7 +477,7 @@ public class ChatClient extends Application {
                         });
                     }
                     
-                    // Handle UNREAD_COUNT for single contact (when marking as read)
+                    // Handle UNREAD_COUNT for single contact
                     else if (message.startsWith("UNREAD_COUNT:")) {
                         String[] parts = message.split(":", 3);
                         if (parts.length == 3) {
@@ -469,7 +520,6 @@ public class ChatClient extends Application {
                                         MessageItem receivedMessage = new MessageItem(content, sender, false, time, true);
                                         msgs.add(receivedMessage);
 
-                                        // Update chat list
                                         ChatPreview existingChat = null;
                                         for (ChatPreview chat : chats) {
                                             if (chat.getContactName().equals(sender)) {
@@ -488,12 +538,9 @@ public class ChatClient extends Application {
                                             chats.add(newChat);
                                         }
 
-                                        // If NOT viewing this chat, mark as unread
                                         if (currentChatContact == null || !currentChatContact.equals(sender)) {
-                                            // Query server for updated unread count
                                             out.println("GET_UNREAD_COUNT:" + sender);
                                         } else {
-                                            // User IS viewing this chat, so auto-mark as read
                                             markMessagesAsRead(sender);
                                         }
 

@@ -65,8 +65,17 @@ public class ChatServer {
                         String clientMsg;
                         while ((clientMsg = in.readLine()) != null) {
                             
+                            // Handle GET_HISTORY command (fetch offline messages)
+                            if (clientMsg.startsWith("GET_HISTORY:")) {
+                                String[] parts2 = clientMsg.split(":", 2);
+                                String recipient = parts2[1];
+                                String history = getMessageHistory(recipient);
+                                out.println("HISTORY:" + history);
+                                System.out.println("Sent message history to " + recipient);
+                            }
+                            
                             // Handle MARK_READ command
-                            if (clientMsg.startsWith("MARK_READ:")) {
+                            else if (clientMsg.startsWith("MARK_READ:")) {
                                 String[] parts2 = clientMsg.split(":", 2);
                                 String sender = parts2[1];
                                 markMessagesAsRead(username, sender);
@@ -123,6 +132,54 @@ public class ChatServer {
                     socket.close();
                 } catch (Exception ignored) {}
             }
+        }
+
+        private String getMessageHistory(String recipient) {
+            StringBuilder history = new StringBuilder();
+            try (Connection conn = DatabaseConfig.getConnection()) {
+                String sql = "SELECT sender_name, content, timestamp FROM messages WHERE recipient = ? ORDER BY timestamp ASC";
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, recipient);
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        while (rs.next()) {
+                            String sender = rs.getString("sender_name");
+                            String content = rs.getString("content");
+                            String timestamp = rs.getString("timestamp");
+                            
+                            // Format: sender###content###timestamp###read_status|sender###...
+                            history.append(sender).append("###")
+                                   .append(content).append("###")
+                                   .append(formatTimestamp(timestamp)).append("###")
+                                   .append("0|");
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.out.println("Error getting message history: " + e.getMessage());
+            }
+            return history.toString();
+        }
+
+        private String formatTimestamp(String dbTimestamp) {
+            try {
+                // DB format: 2025-11-05 15:30:45.123
+                // Convert to: 3:30 pm
+                if (dbTimestamp != null && dbTimestamp.length() >= 19) {
+                    String time = dbTimestamp.substring(11, 19);
+                    String[] parts = time.split(":");
+                    int hour = Integer.parseInt(parts[0]);
+                    int min = Integer.parseInt(parts[1]);
+                    
+                    String ampm = hour >= 12 ? "pm" : "am";
+                    if (hour > 12) hour -= 12;
+                    if (hour == 0) hour = 12;
+                    
+                    return String.format("%d:%02d %s", hour, min, ampm);
+                }
+            } catch (Exception e) {
+                System.out.println("Error formatting timestamp: " + e.getMessage());
+            }
+            return "0:00 am";
         }
 
         private void saveMessageToDatabase(String sender, String recipient, String content) {
